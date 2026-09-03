@@ -15,18 +15,11 @@ export default {
 
     if (url.pathname === "/profiles") {
       if (request.method === "GET") {
-        const value = await env.AUCTION_STATE.get("profiles");
-
-        return new Response(
-          value || JSON.stringify({ profiles: {} }),
-          {
-            status: 200,
-            headers: {
-              ...corsHeaders,
-              "Content-Type": "application/json"
-            }
-          }
-        );
+        const value = await env.AUCTION_KV.get("profiles");
+        return new Response(value || JSON.stringify({ profiles: {} }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
       if (request.method === "POST") {
@@ -61,7 +54,7 @@ export default {
           });
         }
 
-        await env.AUCTION_STATE.put("profiles", body);
+        await env.AUCTION_KV.put("profiles", body);
 
         return new Response(
           JSON.stringify({
@@ -86,18 +79,15 @@ export default {
 
     if (url.pathname === "/auction-state") {
       if (request.method === "GET") {
-        const value = await env.AUCTION_STATE.get("state");
+        const value = await env.AUCTION_KV.get("state");
 
-        return new Response(
-          value || JSON.stringify({}),
-          {
-            status: 200,
-            headers: {
-              ...corsHeaders,
-              "Content-Type": "application/json"
-            }
+        return new Response(value || JSON.stringify({}), {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
           }
-        );
+        });
       }
 
       if (request.method === "POST") {
@@ -148,9 +138,7 @@ export default {
           );
         }
 
-        // Prevent an older auctioneer tab from overwriting
-        // newer auction state.
-        const currentBody = await env.AUCTION_STATE.get("state");
+        const currentBody = await env.AUCTION_KV.get("state");
 
         if (currentBody) {
           try {
@@ -180,12 +168,11 @@ export default {
               );
             }
           } catch {
-            // Allow valid incoming state to replace
-            // malformed/legacy stored state.
+            // Allow valid incoming state to replace malformed/legacy state.
           }
         }
 
-        await env.AUCTION_STATE.put("state", body);
+        await env.AUCTION_KV.put("state", body);
 
         return new Response(
           JSON.stringify({
