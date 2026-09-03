@@ -4,7 +4,7 @@
   "compatibility_date": "2026-09-04",
   "kv_namespaces": [
     {
-      "binding": "AUCTION_STATE",
+      "binding": "AUCTION_KV",
       "id": "667df9a0a7914687a8be0957e7da1020"
     }
   ]
