@@ -482,7 +482,7 @@ header{box-shadow:0 6px 30px rgba(0,0,0,.28)}
 "use strict";
 /* ============================== STATE ============================== */
 const LS_KEY = "conransmith-fpl-2627";
-const SHARED_STATE_URL = "https://conransmith-fpl-auction-2026.aanish0007.workers.dev/auction-state";
+const SHARED_STATE_URL = "https://conransmith-fpl-api.aanish0007.workers.dev/auction-state";
 const SHARED_STATE_KEY = "__CONRANSMITH_SHARED_KEY__";
 const LIVE_PARAMS = new URLSearchParams(location.search);
 const LIVE_VIEW = LIVE_PARAMS.get("live") === "1" || LIVE_PARAMS.get("manager") === "1" || LIVE_PARAMS.get("mode") === "manager" || ["#squads-live","#players-live","#leadership-live"].includes(location.hash);
@@ -496,6 +496,7 @@ const POS = ["GK","DEF","MID","FWD"];
 const SUB_POS = ["DEF","MID","FWD"];
 const DEFAULT_NAMES = ["Anish","Abhi","Kumar","S.A","Adi","Deepu","Raga","Balu","Achu"];
 const FIXED_MANAGER_NAMES = ["Anish","Abhi","Kumar","S.A","Adi","Deepu","Raga","Balu","Achu"];
+const FIXED_MANAGER_TEAMS = ["Predifactor 👑","Going with the flo","Kokki Squad","Weedu","Adi G","karrupu Kalai Ani","Pyoo Murder","StuckInTheMiddle","Achu"];
 const STATIC_PROFILES = {};
 let S = load() || freshState();
 // Keep the complete FPL/API dataset separately from the selected auction pool.
@@ -834,7 +835,7 @@ const PROXIES = [
   {
     name: "Cloudflare FPL proxy",
     wrap: u =>
-      "https://conransmith-fpl-auction-2026.aanish0007.workers.dev/fpl-api/" +
+      "https://pirlo-fpl-api.aanish0007.workers.dev/fpl-api/" +
       u.split("/api/")[1]
   },
   {name:"direct",        wrap:u => u},
@@ -875,12 +876,13 @@ function tierFor(price){
       (position quota x managers, minus guaranteed players already covering it).
    3) If guaranteed players alone exceed the target, the pool runs over - by design. */
 function trimPool(list){
-  // Target pool is a HARD CAP. Every premium/Tier 1 player is always included
-  // first, then Tier 2 players, then Tier 3 players fill the remaining slots.
-  // Within each tier, early-season performers are preferred, then price/points.
+  // GUARANTEE RULE: every player priced at or above guaranteeMin MUST be in
+  // the main auction pool. The target is a target for the remaining slots;
+  // it is intentionally allowed to be exceeded when guaranteed players alone
+  // are more numerous than the target.
   const target = Math.min(S.settings.targetPool || 200, list.length);
+  const guarantee = +(S.settings.guaranteeMin || 6.0);
   const q = S.settings.quota, n = S.participants.length || 8;
-  const [t1,t2] = S.settings.tiers;
 
   const priority = (a,b)=>
     Number(b.earlyProtected)-Number(a.earlyProtected) ||
@@ -890,32 +892,40 @@ function trimPool(list){
 
   const selected = new Set();
 
-  // Premium/Tier 1 players are mandatory in the shortlist, provided they fit
-  // inside the hard target. This prevents any T1 player being left in Remaining.
-  const premium = list.filter(p=>p.price>=t1).sort(priority);
-  for(const p of premium){
-    if(selected.size>=target) break;
-    selected.add(p.id);
-  }
+  // 1) ALL guaranteed players are mandatory. Never stop at target here.
+  const guaranteed = list.filter(p=>p.price>=guarantee).sort(priority);
+  for(const p of guaranteed) selected.add(p.id);
 
-  // Then prioritize Tier 2, while making sure every position has enough
-  // players for all managers' starting-squad quotas.
-  for(const ps of POS){
-    const need = Math.min((q[ps]||0)*n, target-selected.size);
-    const candidates = list
-      .filter(p=>p.pos===ps && !selected.has(p.id) && p.price>=t2 && p.price<t1)
-      .sort(priority);
-    for(let i=0; i<need && i<candidates.length; i++) selected.add(candidates[i].id);
-  }
+  // 2) Fill the remaining target slots with players below the guarantee,
+  //    first covering each manager's positional quota as far as possible.
+  const remainingSlots = Math.max(0, target-selected.size);
+  if(remainingSlots>0){
+    const guaranteedByPos = Object.fromEntries(POS.map(ps=>[ps,0]));
+    guaranteed.forEach(p=>{ if(guaranteedByPos[p.pos]!=null) guaranteedByPos[p.pos]++; });
 
-  // Fill any remaining slots with the strongest Tier 2 players first, then T3.
-  if(selected.size < target){
-    const remaining = list.filter(p=>!selected.has(p.id)).sort((a,b)=>
-      (tierFor(b.price)-tierFor(a.price)) || priority(a,b)
-    );
-    for(const p of remaining){
-      if(selected.size>=target) break;
-      selected.add(p.id);
+    let slotsLeft = remainingSlots;
+    for(const ps of POS){
+      if(slotsLeft<=0) break;
+      const quotaNeed = Math.max(0,(q[ps]||0)*n - guaranteedByPos[ps]);
+      const candidates = list
+        .filter(p=>p.pos===ps && p.price<guarantee && !selected.has(p.id))
+        .sort(priority);
+      const take = Math.min(quotaNeed, slotsLeft, candidates.length);
+      for(let i=0;i<take;i++) selected.add(candidates[i].id);
+      slotsLeft -= take;
+    }
+
+    // 3) If quota filling did not use all remaining slots, fill them with the
+    //    strongest remaining sub-guarantee players, Tier 2 before Tier 3.
+    if(slotsLeft>0){
+      const remaining = list
+        .filter(p=>!selected.has(p.id) && p.price<guarantee)
+        .sort((a,b)=> (tierFor(b.price)-tierFor(a.price)) || priority(a,b));
+      for(const p of remaining){
+        if(slotsLeft<=0) break;
+        selected.add(p.id);
+        slotsLeft--;
+      }
     }
   }
 
@@ -1913,9 +1923,12 @@ function updateSubControls(){
 
 /* ============================== MANAGER PROFILES ============================== */
 function profileFor(m){
+  const idx=Math.max(0,(+m.id||1)-1);
   const base=STATIC_PROFILES[m.id] || {photo:"",teamName:"",history:{"2023/24":"","2024/25":"","2025/26":""}};
   S.profiles=S.profiles||{};
   S.profiles[m.id]=JSON.parse(JSON.stringify(base));
+  // Manager team names are fixed for the Conransmith 2026 auction.
+  S.profiles[m.id].teamName=FIXED_MANAGER_TEAMS[idx] || S.profiles[m.id].teamName || "Team name not set";
   return S.profiles[m.id];
 }
 function managerInitials(name){
