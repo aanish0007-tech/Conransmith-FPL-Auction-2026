@@ -482,7 +482,7 @@ header{box-shadow:0 6px 30px rgba(0,0,0,.28)}
 "use strict";
 /* ============================== STATE ============================== */
 const LS_KEY = "conransmith-fpl-2627";
-const SHARED_STATE_URL = "https://conransmith-fpl-api.aanish0007.workers.dev/auction-state";
+const SHARED_STATE_URL = "https://conransmith-fpl-auction-2026.aanish0007.workers.dev/auction-state";
 const SHARED_STATE_KEY = "__CONRANSMITH_SHARED_KEY__";
 const LIVE_PARAMS = new URLSearchParams(location.search);
 const LIVE_VIEW = LIVE_PARAMS.get("live") === "1" || LIVE_PARAMS.get("manager") === "1" || LIVE_PARAMS.get("mode") === "manager" || ["#squads-live","#players-live","#leadership-live"].includes(location.hash);
@@ -834,7 +834,7 @@ const PROXIES = [
   {
     name: "Cloudflare FPL proxy",
     wrap: u =>
-      "https://pirlo-fpl-api.aanish0007.workers.dev/fpl-api/" +
+      "https://conransmith-fpl-auction-2026.aanish0007.workers.dev/fpl-api/" +
       u.split("/api/")[1]
   },
   {name:"direct",        wrap:u => u},
