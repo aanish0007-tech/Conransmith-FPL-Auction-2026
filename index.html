@@ -989,8 +989,22 @@ async function loadFromFPL(auto){
     S.statsLabel = (data.events||[]).some(e=>e.is_current||e.finished)
       ? "2026/27" : "2025/26";
 
-    const rawPlayers = data.elements
-      .filter(e => e.now_cost/10 >= min)
+    // FPL can retain players who have left the Premier League in elements[]
+    // for historical/reference purposes. Only keep players currently eligible
+    // for the game, with a valid current Premier League team.
+    const currentTeamIds = new Set((data.teams||[]).map(t=>t.id));
+    const eligibleElements = (data.elements||[]).filter(e =>
+      currentTeamIds.has(e.team) &&
+      e.can_select !== false &&
+      e.can_transact !== false &&
+      e.removed !== true &&
+      e.status !== "u" &&
+      e.status !== "n" &&
+      e.now_cost/10 >= min
+    );
+    const excludedCount = Math.max(0,(data.elements||[]).length - eligibleElements.length);
+
+    const rawPlayers = eligibleElements
       .map(e => {
         const early = earlyById.get("fpl"+e.id) || {
           total:0,starts:0,minutes:0,gws:[]
@@ -1020,11 +1034,12 @@ async function loadFromFPL(auto){
         };
       });
 
-    // IMPORTANT: keep every player returned by the FPL API. The target pool is
-    // applied only to S.players, which is the actual auction pool.
-    // Refresh only loads the complete FPL source dataset. Selection of the
-    // auction pool happens only when Build & lock auction queue is clicked.
+    // Keep every CURRENTLY ELIGIBLE FPL player in the source dataset. The target
+    // pool is applied only to S.players, which is the actual auction pool.
+    // Players who have left the EPL / are no longer selectable are excluded here,
+    // before target-pool selection, so they can never reach Auction or Reserve.
     S.allPlayers = rawPlayers;
+    S.fplExcludedCount = excludedCount;
     S.players = [];
     S.rawLoaded = true;
     S.loadedAt = Date.now();
@@ -1042,8 +1057,8 @@ async function loadFromFPL(auto){
 
     st.textContent = "";
     toast(auto
-      ? `FPL source refreshed ✓ ${S.allPlayers.length} players loaded — build the auction pool when ready.`
-      : `FPL source refreshed ✓ ${S.allPlayers.length} players loaded — click Build & lock to select ${S.settings.targetPool||220}.`
+      ? `FPL source refreshed ✓ ${S.allPlayers.length} current players loaded${excludedCount ? ` · ${excludedCount} inactive/left players excluded` : ""} — build the auction pool when ready.`
+      : `FPL source refreshed ✓ ${S.allPlayers.length} current players loaded${excludedCount ? ` · ${excludedCount} inactive/left players excluded` : ""} — click Build & lock to select ${S.settings.targetPool||220}.`
     );
   }catch(e){
     if(auto){
