@@ -2105,27 +2105,57 @@ function exportXLSX(){
   const wb=XLSX.utils.book_new();
   const pmap=Object.fromEntries(S.participants.map(m=>[m.id,m.name]));
 
-  // Export player information only. Photos/profile data are intentionally excluded
-  // to keep the Excel file clean and avoid Excel's 32,767-character cell limit.
+  // IMPORTANT: export the CURRENT in-memory auction state, not a rebuilt/old FPL
+  // dataset. S.players is the locked auction pool; S.allPlayers is the current
+  // FPL source dataset; queue/log/bids/budgets are all included for recovery.
   const rows=S.players.map(p=>({
-    ID:p.id,
-    Name:p.name,
-    WebName:p.web||"",
-    Club:p.team,
-    Position:p.pos,
-    ListPrice:p.price,
-    Tier:p.tier,
-    SeasonPts:p.pts??"",
-    PPG:p.ppg??"",
-    Status:p.status,
-    OwnerID:p.ownerId??"",
-    Owner:p.ownerId?(pmap[p.ownerId]||""):"",
-    Paid:p.paid||0
+    ID:p.id, Name:p.name, WebName:p.web||"", Club:p.team, Position:p.pos,
+    ListPrice:p.price, Tier:p.tier, SeasonPts:p.pts??"", PPG:p.ppg??"",
+    Status:p.status, OwnerID:p.ownerId??"", Owner:p.ownerId?(pmap[p.ownerId]||""):"", Paid:p.paid||0,
+    Photo:p.photo||""
   }));
-
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),"Players");
-  XLSX.writeFile(wb,`pirlo-fpl-players-${new Date().toISOString().slice(0,10)}.xlsx`);
-  toast("Player information exported to Excel ✓");
+
+  const allRows=(S.allPlayers||[]).map(p=>({
+    ID:p.id,Name:p.name,WebName:p.web||"",Club:p.team,Position:p.pos,ListPrice:p.price,
+    Tier:p.tier,SeasonPts:p.pts??"",PPG:p.ppg??"",Status:p.status,OwnerID:p.ownerId??"",Paid:p.paid||0,Photo:p.photo||""
+  }));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(allRows),"AllPlayers");
+
+  const managers=S.participants.map(m=>({ID:m.id,Name:m.name,Budget:m.budget,Spent:m.spent}));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(managers),"Managers");
+
+  const settings=[];
+  Object.entries(S.settings||{}).forEach(([k,v])=>settings.push({Key:k,Value:(typeof v==="object"?JSON.stringify(v):v)}));
+  [["qIndex",S.qIndex],["started",S.started?1:0],["startedAt",S.startedAt||""],["queueBuilt",S.queueBuilt?1:0],
+   ["mainAuctionComplete",S.mainAuctionComplete?1:0],["mainPoolFirstCycleComplete",S.mainPoolFirstCycleComplete?1:0],
+   ["sharedRevision",S.sharedRevision||0],["rawLoaded",S.rawLoaded?1:0],["poolLocked",S.poolLocked?1:0],
+   ["nextReservePlayerId",S.nextReservePlayerId||""],["view",S.view||"setup"],["theme",S.theme||"dark"]]
+   .forEach(([k,v])=>settings.push({Key:k,Value:v}));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(settings),"Settings");
+
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet((S.queue||[]).map((id,i)=>({Order:i,PlayerID:id}))),"Queue");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet((S.log||[]).map(l=>({
+    Type:l.type,PlayerID:l.playerId,Player:l.name||"",BuyerID:l.buyerId??"",Buyer:l.buyer||"",Amount:l.amount||0,Time:l.ts?new Date(l.ts).toISOString():""
+  }))),"Log");
+
+  // Profiles/substitutions are also part of the recoverable state.
+  const profileRows=[];
+  Object.entries(S.profiles||{}).forEach(([id,pr])=>profileRows.push({ManagerID:+id,Photo:pr.photo||"",TeamName:pr.teamName||"",
+    "2023/24 Position":pr.history?.["2023/24"]||"","2024/25 Position":pr.history?.["2024/25"]||"","2025/26 Position":pr.history?.["2025/26"]||""}));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(profileRows),"Profiles");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(Object.entries(S.subs||{}).flatMap(([mid,x])=>POS.slice(1).map(pos=>({ManagerID:+mid,Position:pos,PlayerID:x?.[pos]||""})))),"Subs");
+
+  // Full-fidelity recovery snapshot. Chunk JSON because Excel cells are limited
+  // to 32,767 characters. This preserves fields that aren't represented above.
+  const recovery={...S,profiles:S.profiles||{},subHistory:S.subHistory||[]};
+  const json=JSON.stringify(recovery);
+  const chunkSize=30000, chunks=[];
+  for(let i=0;i<json.length;i+=chunkSize) chunks.push({Part:chunks.length,Data:json.slice(i,i+chunkSize)});
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(chunks),"Recovery");
+
+  XLSX.writeFile(wb,`conransmith-fpl-auction-${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast(`Full auction state exported ✓ ${S.players.length} auction players · ${S.allPlayers?.length||0} FPL players · recovery included`);
 }
 
 function importXLSX(buf){
