@@ -496,6 +496,7 @@ const POS = ["GK","DEF","MID","FWD"];
 const SUB_POS = ["DEF","MID","FWD"];
 const DEFAULT_NAMES = ["Anish","Abhi","Kumar","S.A","Adi","Deepu","Raga","Balu","Achu"];
 const FIXED_MANAGER_NAMES = ["Anish","Abhi","Kumar","S.A","Adi","Deepu","Raga","Balu","Achu"];
+const FIXED_MANAGER_TEAMS = ["Predifactor 👑","Going with the flo","Kokki Squad","Weedu","Adi G","karrupu Kalai Ani","Pyoo Murder","StuckInTheMiddle","Achu"];
 const STATIC_PROFILES = {};
 let S = load() || freshState();
 // Keep the complete FPL/API dataset separately from the selected auction pool.
@@ -802,16 +803,14 @@ function allById(id){ return S.allPlayers.find(p=>p.id===id); }
 /* compact display name for tight tables (squads, leaderboard) */
 const shortName = p => (p&&(p.web || (p.name||"").trim().split(" ").pop())) || "?";
 function playerPhotoUrl(p){
-  if(!p) return "";
-  // For FPL players always derive the image from the current official FPL player ID.
-  // The cache-buster prevents an old browser-cached club image from being reused.
-  const raw=String(p.id||p.photo||"").trim();
+  if(!p||!p.photo) return "";
+  const raw=String(p.photo).trim();
   // FPL API normally returns values such as "p123456.jpg".
   // Some imported files may contain just the numeric player id or a full URL.
   const file=raw.replace(/^https?:\/\//,"").split("/").pop();
   let base=file.replace(/\.(png|jpg|jpeg)$/i,"").replace(/^p/i,"");
   if(!/^\d+$/.test(base)) return "";
-  return `https://resources.premierleague.com/premierleague/photos/players/250x250/p${base}.png?v=2026-27`;
+  return `https://resources.premierleague.com/premierleague/photos/players/250x250/p${base}.png`;
 }
 function partById(id){ return S.participants.find(p=>p.id===id); }
 
@@ -832,12 +831,18 @@ const sndOnce=()=>beep(660,.15), sndTwice=()=>beep(880,.15), sndSold=()=>{beep(5
       netlify.toml redirect rule (100% reliable, no third parties).
    2. Direct fetch (works in rare embedded/extension contexts).
    3. Public CORS proxies as a last resort for local file:// use. */
-const FPL_BOOTSTRAP = "https://fantasy.premierleague.com/api/bootstrap-static/";
 const PROXIES = [
-  // Only official FPL data is accepted. The proxy is used only to overcome browser CORS.
-  {name:"Cloudflare FPL proxy", wrap:u =>
-    "https://pirlo-fpl-api.aanish0007.workers.dev/fpl-api/" + u.split("/api/")[1]},
-  {name:"official FPL direct", wrap:u => u},
+  {
+    name: "Cloudflare FPL proxy",
+    wrap: u =>
+      "https://pirlo-fpl-api.aanish0007.workers.dev/fpl-api/" +
+      u.split("/api/")[1]
+  },
+  {name:"direct",        wrap:u => u},
+  {name:"corsproxy.io",  wrap:u => "https://corsproxy.io/?url=" + encodeURIComponent(u)},
+  {name:"allorigins",    wrap:u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u)},
+  {name:"codetabs",      wrap:u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u)},
+  {name:"allorigins-get",wrap:u => "https://api.allorigins.win/get?url=" + encodeURIComponent(u), unwrap:true},
 ];
 async function fetchJSON(url, onStatus){
   let lastErr;
@@ -940,7 +945,7 @@ async function loadFromFPL(auto){
     if(!auto) readSetupInputs();
 
     const data = await fetchJSON(
-      FPL_BOOTSTRAP+"?_="+Date.now(),
+      "https://fantasy.premierleague.com/api/bootstrap-static/?_="+Date.now(),
       auto ? null : (m=>st.textContent=m)
     );
 
@@ -985,9 +990,7 @@ async function loadFromFPL(auto){
       ? "2026/27" : "2025/26";
 
     const rawPlayers = data.elements
-      // Only players currently active in the official FPL game are eligible.
-      // `u`/`n` entries are unavailable/not current (for example players who have left).
-      .filter(e => e.team && e.status !== "u" && e.status !== "n" && e.now_cost/10 >= min)
+      .filter(e => e.now_cost/10 >= min)
       .map(e => {
         const early = earlyById.get("fpl"+e.id) || {
           total:0,starts:0,minutes:0,gws:[]
@@ -1022,7 +1025,6 @@ async function loadFromFPL(auto){
     // Refresh only loads the complete FPL source dataset. Selection of the
     // auction pool happens only when Build & lock auction queue is clicked.
     S.allPlayers = rawPlayers;
-    S.sourceType = "fpl";
     S.players = [];
     S.rawLoaded = true;
     S.loadedAt = Date.now();
@@ -1050,8 +1052,8 @@ async function loadFromFPL(auto){
     }
 
     st.textContent = location.protocol==="file:"
-      ? "Official FPL data could not be reached from this local file. Deploy the app with the Cloudflare FPL proxy available."
-      : "Couldn't reach the official FPL API. Check the Cloudflare FPL proxy and retry.";
+      ? "The FPL API blocks browser requests (CORS) and the public proxy fallbacks didn't respond. Deploy to Netlify with netlify.toml for the reliable route."
+      : "Couldn't reach the FPL API. Make sure netlify.toml is deployed alongside this file.";
     console.error(e);
   }
 
@@ -1082,7 +1084,6 @@ function handleFile(f){
       // File import follows the same flow as FPL refresh: load the complete
       // source first; Build & lock creates the selected auction pool later.
       S.allPlayers = f.name.endsWith(".json") ? JSON.parse(r.result) : parseCSV(r.result);
-      S.sourceType = "file";
       S.players = [];
       S.queue = []; S.qIndex = 0; S.queueBuilt = false; S.poolLocked = false;
       S.manualPoolIds = [];
@@ -1922,9 +1923,12 @@ function updateSubControls(){
 
 /* ============================== MANAGER PROFILES ============================== */
 function profileFor(m){
+  const idx=Math.max(0,(+m.id||1)-1);
   const base=STATIC_PROFILES[m.id] || {photo:"",teamName:"",history:{"2023/24":"","2024/25":"","2025/26":""}};
   S.profiles=S.profiles||{};
   S.profiles[m.id]=JSON.parse(JSON.stringify(base));
+  // Manager team names are fixed for the Conransmith 2026 auction.
+  S.profiles[m.id].teamName=FIXED_MANAGER_TEAMS[idx] || S.profiles[m.id].teamName || "Team name not set";
   return S.profiles[m.id];
 }
 function managerInitials(name){
@@ -2086,58 +2090,27 @@ function exportXLSX(){
   const wb=XLSX.utils.book_new();
   const pmap=Object.fromEntries(S.participants.map(m=>[m.id,m.name]));
 
-  // FULL AUCTION SNAPSHOT: this workbook is designed for backup/pause/resume.
-  // Keep private auction state (sealed queue/current lot) in the workbook too.
-  const players=S.players.map(p=>({
-    ID:p.id, Name:p.name, WebName:p.web||"", Club:p.team, Position:p.pos,
-    ListPrice:p.price, Tier:p.tier, SeasonPts:p.pts??"", PPG:p.ppg??"",
-    Photo:p.photo||"", Status:p.status, OwnerID:p.ownerId??"", Owner:p.ownerId?(pmap[p.ownerId]||""):"", Paid:p.paid||0
+  // Export player information only. Photos/profile data are intentionally excluded
+  // to keep the Excel file clean and avoid Excel's 32,767-character cell limit.
+  const rows=S.players.map(p=>({
+    ID:p.id,
+    Name:p.name,
+    WebName:p.web||"",
+    Club:p.team,
+    Position:p.pos,
+    ListPrice:p.price,
+    Tier:p.tier,
+    SeasonPts:p.pts??"",
+    PPG:p.ppg??"",
+    Status:p.status,
+    OwnerID:p.ownerId??"",
+    Owner:p.ownerId?(pmap[p.ownerId]||""):"",
+    Paid:p.paid||0
   }));
-  const allPlayers=S.allPlayers.map(p=>({
-    ID:p.id, Name:p.name, WebName:p.web||"", Club:p.team, Position:p.pos,
-    ListPrice:p.price, Tier:p.tier, SeasonPts:p.pts??"", PPG:p.ppg??"", Photo:p.photo||"",
-    Status:p.status, OwnerID:p.ownerId??"", Paid:p.paid||0
-  }));
-  const managers=S.participants.map(m=>({ID:m.id,Name:m.name,Budget:m.budget,Spent:m.spent}));
-  const settings=[
-    ["budget",S.settings.budget],["timer",S.settings.timer],["timerT1",S.settings.timerT1],
-    ["timerT2",S.settings.timerT2],["timerT3",S.settings.timerT3],["openBid",S.settings.openBid],
-    ["minBid",S.settings.minBid],["minPrice",S.settings.minPrice],["targetPool",S.settings.targetPool],
-    ["guaranteeMin",S.settings.guaranteeMin],["quota",JSON.stringify(S.settings.quota)],
-    ["tiers",JSON.stringify(S.settings.tiers)],["sound",S.settings.sound?1:0],
-    ["qIndex",S.qIndex],["started",S.started?1:0],["startedAt",S.startedAt||""],
-    ["mainAuctionComplete",S.mainAuctionComplete?1:0],["mainPoolFirstCycleComplete",S.mainPoolFirstCycleComplete?1:0],
-    ["queueBuilt",S.queueBuilt?1:0],["poolLocked",S.poolLocked?1:0],["theme",S.theme||"dark"],
-    ["view",S.view||"setup"],["profileSelected",S.profileSelected||1],
-    ["sharedRevision",S.sharedRevision||0],["nextReservePlayerId",S.nextReservePlayerId??""],
-    ["rawLoaded",S.rawLoaded?1:0]
-  ].map(([Key,Value])=>({Key,Value}));
 
-  const queue=S.queue.map((id,i)=>({Order:i,PlayerID:id}));
-  const mainPoolIds=S.mainPoolIds.map(id=>({PlayerID:id}));
-  const mainPoolSeenIds=S.mainPoolSeenIds.map(id=>({PlayerID:id}));
-  const manualPoolIds=S.manualPoolIds.map(id=>({PlayerID:id}));
-  const log=S.log.map(l=>({Type:l.type,PlayerID:l.playerId,Player:l.name,BuyerID:l.buyerId??"",Buyer:l.buyer??"",Amount:l.amount||0,Time:l.ts?new Date(l.ts).toISOString():""}));
-  const subs=[]; Object.entries(S.subs||{}).forEach(([managerId,v])=>subs.push({ManagerID:+managerId,DEF:v?.DEF??"",MID:v?.MID??"",FWD:v?.FWD??""}));
-  const subHistory=(S.subHistory||[]).map(x=>({ManagerID:x.managerId,OutID:x.outId,InID:x.inId,Time:x.ts?new Date(x.ts).toISOString():""}));
-  const profiles=Object.entries(S.profiles||{}).map(([managerId,p])=>({ManagerID:+managerId,Photo:p?.photo||"",TeamName:p?.teamName||"",["2023/24 Position"]:p?.history?.["2023/24"]||"",["2024/25 Position"]:p?.history?.["2024/25"]||"",["2025/26 Position"]:p?.history?.["2025/26"]||""}));
-
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(players),"Players");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(managers),"Managers");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(settings),"Settings");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(queue),"Queue");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(allPlayers),"All Players");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(log),"Log");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(mainPoolIds),"Main Pool IDs");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(mainPoolSeenIds),"Seen IDs");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(manualPoolIds),"Manual Pool IDs");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(subs),"Subs");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(subHistory),"Sub History");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(profiles),"Profiles");
-
-  const stamp=new Date().toISOString().replace(/[:.]/g,"-");
-  XLSX.writeFile(wb,`conransmith-fpl-auction-backup-${stamp}.xlsx`);
-  toast("Complete auction state exported ✓ — safe to use as a pause/resume backup");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),"Players");
+  XLSX.writeFile(wb,`pirlo-fpl-players-${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast("Player information exported to Excel ✓");
 }
 
 function importXLSX(buf){
@@ -2147,7 +2120,6 @@ function importXLSX(buf){
   const P=sh("Players"), M=sh("Managers");
   if(!P.length||!M.length){ toast("That workbook needs at least the Players and Managers sheets."); return; }
   const ns=freshState();
-  ns.sourceType = "file";
   // settings + meta
   for(const r of sh("Settings")){
     const k=r.Key,v=r.Value;
@@ -2373,7 +2345,7 @@ if(S.started && S.onBlock){ const bp=pById(S.onBlock.pid); timeLeft=timerForTier
 /* Real-time pool: whenever the app opens BEFORE the auction has started, quietly
    re-fetch the latest players and prices from FPL (throttled to every 5 min).
    Once the auction starts, the pool is frozen — prices are locked for fairness. */
-if(!LIVE_VIEW && S.rawLoaded && S.sourceType !== "file" && !S.started && !S.queueBuilt && (!S.loadedAt || Date.now()-S.loadedAt > 5*60*1000)) loadFromFPL(true);
+if(!LIVE_VIEW && S.rawLoaded && !S.started && !S.queueBuilt && (!S.loadedAt || Date.now()-S.loadedAt > 5*60*1000)) loadFromFPL(true);
 </script>
 </body>
 </html>
